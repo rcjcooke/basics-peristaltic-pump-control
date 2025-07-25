@@ -69,8 +69,27 @@ void PeristalticPumpController::pumpTargetVolume(float targetVolume) {
     mVolumeLastCalcTime = millis();
     mPumpedVolume = 0;
     mPumpTargetMode = PumpTargetMode::Volume;
-    // Start at full speed
-    setTargetPumpSpeedInternal(100.0f);
+
+    if (mRampEnabled) {
+      // Calculate volume pumped during ramp up/down at full speed
+      // For constant acceleration, ramp time = 100 / RAMP_SPEED_PERCENTAGE_PER_MS
+      float rampTime = 100.0f / RAMP_SPEED_PERCENTAGE_PER_MS;
+      float rampVolume = (rampTime * mMaxFlowRateMlMin) / (2.0f * 60.0f * 1000.0f); // ml per ramp
+      float totalRampVolume = 2 * rampVolume; // Both up and down ramps
+      
+      if (targetVolume <= totalRampVolume) {
+        // For small volumes, calculate required speed to achieve target volume
+        // targetVolume = (rampTime * maxFlowRate * speedPercent) / (60000)
+        float speedPercent = (targetVolume * 60000.0f) / (rampTime * mMaxFlowRateMlMin);
+        setTargetPumpSpeedInternal(speedPercent);
+      } else {
+        // Normal volume - start at full speed
+        setTargetPumpSpeedInternal(100.0f);
+      }
+    } else {
+      // No ramping - start at full speed
+      setTargetPumpSpeedInternal(100.0f);
+    }
   }
 }
 
@@ -81,42 +100,50 @@ void PeristalticPumpController::controlLoop() {
   // Handle speed ramping
   if (mRamping) {
     unsigned long elapsedTime = safeTimeDifference(mRampStartTime, currentTime);
-    if (elapsedTime < RAMP_TIME_MS) {
-      // Still ramping
-      float rampProgress = (float)(currentTime - mRampStartTime) / RAMP_TIME_MS;
-      float speedPercentage =
-          mRampStartSpeed +
-          (mTargetSpeedPercentage - mRampStartSpeed) * rampProgress;
-      setPumpSpeed(speedPercentage);
-    } else {
-      // Finished ramping
-      setPumpSpeed(mTargetSpeedPercentage);
-      mRamping = false;
-      // Clear mode when the ramp was the target, or if we're in volume mode then once we've finished pumping only
-      if (mPumpTargetMode != PumpTargetMode::Volume || mTargetSpeedPercentage == 0.0f) {
-        mPumpTargetMode = PumpTargetMode::None;
+    float speedDelta = RAMP_SPEED_PERCENTAGE_PER_MS * elapsedTime;
+    
+    // Calculate new speed based on direction of ramp
+    float newSpeed;
+    if (mTargetSpeedPercentage > mRampStartSpeed) {
+      // Ramping up
+      newSpeed = mRampStartSpeed + speedDelta;
+      if (newSpeed >= mTargetSpeedPercentage) {
+        newSpeed = mTargetSpeedPercentage;
+        mRamping = false;
       }
+    } else {
+      // Ramping down
+      newSpeed = mRampStartSpeed - speedDelta;
+      if (newSpeed <= mTargetSpeedPercentage) {
+        newSpeed = mTargetSpeedPercentage;
+        mRamping = false;
+      }
+    }
+    
+    setPumpSpeed(newSpeed);
+    
+    // Clear mode when appropriate
+    if (!mRamping && (mPumpTargetMode != PumpTargetMode::Volume || mTargetSpeedPercentage == 0.0f)) {
+      mPumpTargetMode = PumpTargetMode::None;
     }
   }
 
   // Handle volume-based pumping
   if (mPumpTargetMode == PumpTargetMode::Volume) {
-    // Calculate additional pumped volume since last iteration based on time and flow rate and accumulate
     unsigned long pumpTime = safeTimeDifference(mVolumeLastCalcTime, currentTime);
     mPumpedVolume += lastIterationFlowRate * (pumpTime / (60.0f * 1000.0f));
-    mVolumeLastCalcTime = currentTime; // Reset start time for next iteration
+    mVolumeLastCalcTime = currentTime;
 
     if (mRampEnabled && !mRamping) {
       // Calculate volume that will be pumped during ramp down
-      // Area under linear ramp = (current_flow_rate * ramp_time) / 2
-      float rampDownVolume = (mFlowRate * RAMP_TIME_MS) / (2.0f * 60.0f * 1000.0f);
+      // For constant acceleration, ramp down time = current_speed / RAMP_SPEED_PERCENTAGE_PER_MS
+      float rampDownTime = mSpeedPercentage / RAMP_SPEED_PERCENTAGE_PER_MS;
+      float rampDownVolume = (mFlowRate * rampDownTime) / (2.0f * 60.0f * 1000.0f);
       
-      // Start ramping down early to account for ramp down volume
       if (mPumpedVolume + rampDownVolume >= mTargetVolume) {
         setTargetPumpSpeedInternal(0);
       }
     } else if (!mRampEnabled) {
-      // No ramping - stop immediately at target volume
       if (mPumpedVolume >= mTargetVolume) {
         setTargetPumpSpeedInternal(0);
         mPumpTargetMode = PumpTargetMode::None;
