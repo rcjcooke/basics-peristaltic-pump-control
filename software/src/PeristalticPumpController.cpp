@@ -12,8 +12,6 @@ PeristalticPumpController::PeristalticPumpController(
     float maxFlowRateMlMin)
       : mPeristalticPumpControlPin(peristalticPumpControlPin), 
         mRampEnabled(ramp),
-        mRampStartTime(0), 
-        mRampStartSpeed(0.0f),
         mMaxFlowRateMlMin(maxFlowRateMlMin) {
   pinMode(mPeristalticPumpControlPin, OUTPUT);
   analogWrite(mPeristalticPumpControlPin, 0);
@@ -50,14 +48,9 @@ void PeristalticPumpController::setTargetPumpSpeed(
   mTargetSpeedPercentage = constrain(targetSpeedPercentage, 0.0f, 100.0f);
   mPumpTargetMode = PumpTargetMode::Speed;
 
-  if (!mRampEnabled) {
-    setPumpSpeed(mTargetSpeedPercentage);
-  } else {
-    mRampStartTime = millis();
-    mRampStartSpeed = mSpeedPercentage;
-  }
-
-  mPumpOn = mTargetSpeedPercentage > 0;
+  setTargetPumpSpeedInternal(mTargetSpeedPercentage);
+  // If we're not ramping, then we've now already hit the target speed
+  if (!mRampEnabled) mPumpTargetMode = PumpTargetMode::None;
 }
 
 void PeristalticPumpController::setTargetPumpFlowRate(float targetFlowRate) {
@@ -65,26 +58,30 @@ void PeristalticPumpController::setTargetPumpFlowRate(float targetFlowRate) {
   mTargetFlowRate = constrain(targetFlowRate, 0.0f, mMaxFlowRateMlMin);
   mPumpTargetMode = PumpTargetMode::FlowRate;
   // Convert flow rate to speed percentage
-  setTargetPumpSpeed((mTargetFlowRate / mMaxFlowRateMlMin) * 100.0f);
+  setTargetPumpSpeedInternal((mTargetFlowRate / mMaxFlowRateMlMin) * 100.0f);
+  // If we're not ramping, then we've now already hit the target flow rate
+  if (!mRampEnabled) mPumpTargetMode = PumpTargetMode::None;
 }
 
 void PeristalticPumpController::pumpTargetVolume(float targetVolume) {
   if (targetVolume > 0) {
     mTargetVolume = targetVolume;
-    mVolumeStartTime = millis();
+    mVolumeLastCalcTime = millis();
     mPumpedVolume = 0;
     mPumpTargetMode = PumpTargetMode::Volume;
     // Start at full speed
-    setTargetPumpSpeed(100.0f);
+    setTargetPumpSpeedInternal(100.0f);
   }
 }
 
 void PeristalticPumpController::controlLoop() {
   unsigned long currentTime = millis();
+  float lastIterationFlowRate = mFlowRate;
 
   // Handle speed ramping
-  if (mRampEnabled && mPumpTargetMode != PumpTargetMode::None) {
-    if (currentTime - mRampStartTime < RAMP_TIME_MS) {
+  if (mRamping) {
+    unsigned long elapsedTime = safeTimeDifference(mRampStartTime, currentTime);
+    if (elapsedTime < RAMP_TIME_MS) {
       // Still ramping
       float rampProgress = (float)(currentTime - mRampStartTime) / RAMP_TIME_MS;
       float speedPercentage =
@@ -94,38 +91,35 @@ void PeristalticPumpController::controlLoop() {
     } else {
       // Finished ramping
       setPumpSpeed(mTargetSpeedPercentage);
-      if (mPumpTargetMode == PumpTargetMode::Volume) {
-        // If we're looking to pump a volume, we only stop after we've finished ramping down
-        if (mTargetSpeedPercentage == 0.0f) mPumpTargetMode = PumpTargetMode::None;
-      } else {
-        // In all other modes, we're done once we've ramped
+      mRamping = false;
+      // Clear mode when the ramp was the target, or if we're in volume mode then once we've finished pumping only
+      if (mPumpTargetMode != PumpTargetMode::Volume || mTargetSpeedPercentage == 0.0f) {
         mPumpTargetMode = PumpTargetMode::None;
       }
     }
   }
 
-  // Update flow rate based on current speed
-  mFlowRate = (mSpeedPercentage / 100.0f) * mMaxFlowRateMlMin;
-
   // Handle volume-based pumping
   if (mPumpTargetMode == PumpTargetMode::Volume) {
-    // Calculate pumped volume based on time and flow rate
-    unsigned long pumpTime = currentTime - mVolumeStartTime;
-    mPumpedVolume = (mFlowRate * pumpTime) / (60.0f * 1000.0f); // Convert to ml
+    // Calculate additional pumped volume since last iteration based on time and flow rate and accumulate
+    unsigned long pumpTime = safeTimeDifference(mVolumeLastCalcTime, currentTime);
+    mPumpedVolume += lastIterationFlowRate * (pumpTime / (60.0f * 1000.0f));
+    mVolumeLastCalcTime = currentTime; // Reset start time for next iteration
 
-    if (mRampEnabled) {
+    if (mRampEnabled && !mRamping) {
       // Calculate volume that will be pumped during ramp down
       // Area under linear ramp = (current_flow_rate * ramp_time) / 2
       float rampDownVolume = (mFlowRate * RAMP_TIME_MS) / (2.0f * 60.0f * 1000.0f);
       
       // Start ramping down early to account for ramp down volume
       if (mPumpedVolume + rampDownVolume >= mTargetVolume) {
-        setTargetPumpSpeed(0);
+        setTargetPumpSpeedInternal(0);
       }
-    } else {
+    } else if (!mRampEnabled) {
       // No ramping - stop immediately at target volume
       if (mPumpedVolume >= mTargetVolume) {
-        setTargetPumpSpeed(0);
+        setTargetPumpSpeedInternal(0);
+        mPumpTargetMode = PumpTargetMode::None;
       }
     }
   }
@@ -134,6 +128,40 @@ void PeristalticPumpController::controlLoop() {
 void PeristalticPumpController::setPumpSpeed(float speedPercentage) {
   // Immediately set the pump speed
   mSpeedPercentage = speedPercentage;
+  // Update flow rate based on current speed
+  mFlowRate = (mSpeedPercentage / 100.0f) * mMaxFlowRateMlMin;
+  // Make it true!
   analogWrite(mPeristalticPumpControlPin,
               map(mSpeedPercentage, 0, 100, 0, 255));
+  // If we're running at 0 speed then the pump is off, otherwise it's on
+  mPumpOn = mSpeedPercentage > 0;
+}
+
+void PeristalticPumpController::setTargetPumpSpeedInternal(float targetSpeedPercentage) {
+  // Don't start new ramp if already ramping to same target
+  if (mRamping && targetSpeedPercentage == mTargetSpeedPercentage) {
+    return;
+  }
+
+  mTargetSpeedPercentage = targetSpeedPercentage;
+  if (!mRampEnabled) {
+    // Go straight to the target speed without ramping
+    setPumpSpeed(mTargetSpeedPercentage);
+  } else {
+    mRampStartTime = millis();
+    mRampStartSpeed = mSpeedPercentage;
+    mRamping = true;
+  }
+}
+namespace PPC {
+
+  unsigned long safeTimeDifference(unsigned long startTime, unsigned long endTime) {
+    if (endTime >= startTime) {
+      return endTime - startTime;
+    } else {
+      // Handle wrap-around case
+      return (0xFFFFFFFF - startTime + endTime);
+    }
+  }
+
 }

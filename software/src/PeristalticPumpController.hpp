@@ -51,9 +51,9 @@ public:
    *******************************/
   // Control loop to be called in the main loop
   void controlLoop();
-  // Set the pump to run at a specific speed (percentage of maximum speed)
+  // Set the pump to target a specific speed (percentage of maximum speed)
   void setTargetPumpSpeed(float targetSpeedPercentage);
-  // Set the pump to run at a specific flow rate
+  // Set the pump to target a specific flow rate
   void setTargetPumpFlowRate(float targetFlowRate);
   // Pump a specific volume of liquid as quickly as possible
   void pumpTargetVolume(float targetVolume);
@@ -85,15 +85,17 @@ private:
 
   // Ramping control
   bool mRampEnabled;
+  // true if we're currently ramping up or down
+  bool mRamping = false;
   // The time ramping started
-  unsigned long mRampStartTime;
+  unsigned long mRampStartTime = 0;
   // The speed at which the ramp started
-  float mRampStartSpeed;
+  float mRampStartSpeed = 0.0f;
 
   // The start time for pumping a target volume
-  unsigned long mVolumeStartTime;
+  unsigned long mVolumeLastCalcTime = 0;
   // The pumped volume so far in mL
-  float mPumpedVolume;
+  float mPumpedVolume = 0.0f;
 
   // Maximum flow rate in ml/min
   float mMaxFlowRateMlMin;
@@ -103,6 +105,8 @@ private:
    *******************************/
   // Immediately set the pump speed
   void setPumpSpeed(float speedPercentage);
+  // Set the pump to target a specific speed (percentage of maximum speed) - no mode change
+  void setTargetPumpSpeedInternal(float targetSpeedPercentage);
 
 };
 
