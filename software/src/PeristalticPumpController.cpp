@@ -99,7 +99,7 @@ void PeristalticPumpController::controlLoop() {
 
   // Handle speed ramping
   if (mRamping) {
-    unsigned long elapsedTime = safeTimeDifference(mRampStartTime, currentTime);
+    unsigned long elapsedTime = PPC::safeTimeDifference(mRampStartTime, currentTime);
     float speedDelta = RAMP_SPEED_PERCENTAGE_PER_MS * elapsedTime;
     
     // Calculate new speed based on direction of ramp
@@ -130,7 +130,7 @@ void PeristalticPumpController::controlLoop() {
 
   // Handle volume-based pumping
   if (mPumpTargetMode == PumpTargetMode::Volume) {
-    unsigned long pumpTime = safeTimeDifference(mVolumeLastCalcTime, currentTime);
+    unsigned long pumpTime = PPC::safeTimeDifference(mVolumeLastCalcTime, currentTime);
     mPumpedVolume += lastIterationFlowRate * (pumpTime / (60.0f * 1000.0f));
     mVolumeLastCalcTime = currentTime;
 

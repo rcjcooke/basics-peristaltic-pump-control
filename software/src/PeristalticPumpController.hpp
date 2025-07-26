@@ -6,6 +6,9 @@
 
 namespace PPC {
 
+  // Calculates a time difference in ms, handling overflow
+  unsigned long safeTimeDifference(unsigned long startTime, unsigned long endTime);
+
   enum class PumpTargetMode {
     None,          // No target mode set
     Speed,         // Target speed in percentage of maximum speed
@@ -25,7 +28,7 @@ public:
   // The time period over which the pump speed is ramped up or down
   static const unsigned long RAMP_TIME_MS = 100;
   // The speed at which the pump ramps up or down in percentage points per millisecond
-  static const float RAMP_SPEED_PERCENTAGE_PER_MS = 1.0f;  // 1% per ms = full speed in 100ms
+  static constexpr float RAMP_SPEED_PERCENTAGE_PER_MS = 1.0f;  // 1% per ms = full speed in 100ms
 
   /*******************************
    * Constructors
