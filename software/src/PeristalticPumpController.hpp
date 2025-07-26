@@ -25,10 +25,8 @@ public:
   /*******************************
    * Constants
    *******************************/
-  // The time period over which the pump speed is ramped up or down
-  static const unsigned long RAMP_TIME_MS = 100;
   // The speed at which the pump ramps up or down in percentage points per millisecond
-  static constexpr float RAMP_SPEED_PERCENTAGE_PER_MS = 1.0f;  // 1% per ms = full speed in 100ms
+  static constexpr float RAMP_SPEED_PERCENTAGE_PER_MS = 10.0f;  // 10% per ms = full speed in 10ms
 
   /*******************************
    * Constructors
